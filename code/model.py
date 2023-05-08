@@ -1,5 +1,6 @@
 import tensorflow as tf
 import config
+from data_utils import UNK_ID
 
 class ParagraphEncoder(tf.keras.layers.Layer):
     def __init__(self, embeddings, vocab_size, embedding_size, hidden_size, num_layers, dropout_rate, ans_embedding_size, ans_embedding_length):
@@ -43,14 +44,15 @@ class ParagraphEncoder(tf.keras.layers.Layer):
         return updated_output
     
     def call(self, src_seq, src_len, ans_seq):
-        total_length = src_seq.shape[1]
+        total_length = src_seq.shape[1]  # remains unused until we figure out packing
         src_embedding = self.embedding(src_seq)
         ans_embedding = self.ans_embedding(ans_seq)
         embedding = tf.concat([src_embedding, ans_embedding], 2)
         padded_embedding = tf.keras.preprocess.sequence.pad_sequences(
             embedding, padding="post"
         )
-        outputs, h, c = self.lstm(embedding)
+        outputs, states = self.lstm(padded_embedding)
+        h, c = states
 
         # self attention
         mask = tf.math.sign(src_seq)
@@ -69,7 +71,7 @@ class ParagraphEncoder(tf.keras.layers.Layer):
         return outputs, concat_states
     
 
-class PassageDecoder(tf.keras.layers.Layer):
+class ParagraphDecoder(tf.keras.layers.Layer):
     def __init__(self, embeddings, vocab_size, embedding_size, hidden_size, num_layers, dropout_rate):
         super().__init__()
         self.vocab_size = vocab_size
@@ -140,8 +142,8 @@ class PassageDecoder(tf.keras.layers.Layer):
             zeros = tf.zeros((batch_size, num_oov))
             extended_logit = tf.concat([logit, zeros], axis=1)
             out = tf.zeros_like(extended_logit) - 1e12
-            out = tf.math.segment_max(energy, ext_src_seq)
-            out = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=out)
+            out = tf.math.segment_max(energy, ext_src_seq)  # TODO verify
+            out = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=out)     # TODO verify
             logit = extended_logit + out
             logit = logit - 1e12 * (1 - logit)
 
@@ -157,7 +159,53 @@ class PassageDecoder(tf.keras.layers.Layer):
         # forward one step lstm
         # y : [b]
         embedded = self.embedding(tf.expand_dims(y, axis=1))
+        lstm_inputs = self.reduce_layer(tf.concat([embedded, prev_context], axis=2))
+        output, states = self.lstm(lstm_inputs, initial_state=prev_states)
+
+        context, energy = self.attention(output, encoder_features, encoder_mask)
+        concat_input = tf.expand_dims(tf.concat([output, context], axis=2), axis=1)
+        logit_input = tf.keras.activations.tanh(self.concat_layer(concat_input))
+        logit = self.logit_layer(logit_input)
+
+        batch_size = y.shape[0]
+        num_oov = max(tf.math.maximum(ext_x - self.vocab_size + 1), 0)
+        zeros = tf.zeros((batch_size, num_oov))
+        extended_logit = tf.concat([logit, zeros], axis=1)
+        out = tf.zeros_like(extended_logit) - 1e12
+        out = tf.math.segment_max(energy, ext_x)  # TODO verify
+        out = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=out)     # TODO verify
+        logit = extended_logit + out
+        logit = tf.map_fin(fn=lambda x: 0 if x == -1e12 else x, elems=logit)
+        # forcing UNK prob 0
+        logit[:, UNK_ID] = -1e12
+
+        return logit, states, context
+
+
+class Seq2Seq(tf.keras.layers.Layer):
+    def __init__(self, embedding=None):
+        super().__init__()
+        self.encoder = ParagraphEncoder(embedding,
+                                        config.vocab_size,
+                                        config.embedding_size,
+                                        config.hidden_size,
+                                        config.num_layers,
+                                        config.dropout)
+        self.decoder = ParagraphDecoder(embedding, 
+                                        config.vocab_size,
+                                        config.embedding_size,
+                                        2 * config.hidden_size,
+                                        config.num_layers,
+                                        config.dropout)
         
+    def call(self, src_seq, tag_seq, ext_src_seq, trg_seq):
+        enc_mask = tf.math.sign(src_seq)
+        src_len = tf.reduce_sum(enc_mask, axis=1)
+        enc_outputs, enc_states = self.encoder(src_seq, src_len, tag_seq)
+        sos_trg = trg_seq[:, :-1]
+
+        logits = self.decoder(sos_trg, ext_src_seq, enc_states, enc_outputs, enc_mask)
+        return logits
 
 
 
