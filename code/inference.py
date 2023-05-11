@@ -38,7 +38,13 @@ class BeamSearcher(object):
         
         self.output_dir = output_dir
         self.test_data = open(config.test_trg_file, "r").readlines()
-        self.data_loader = get_loader(config.test_src_file,
+        self.data_loader, _ = get_loader(config.test_src_file,
+                                      config.test_trg_file,
+                                      word2idx,
+                                      batch_size=1,
+                                      use_tag=True,
+                                      shuffle=False)
+        self.dataset, _ = get_loader(config.test_src_file,
                                       config.test_trg_file,
                                       word2idx,
                                       batch_size=1,
@@ -47,7 +53,7 @@ class BeamSearcher(object):
         
         self.tok2idx = word2idx
         self.idx2tok = {idx: tok for tok, idx in self.tok2idx.items()}
-        self.model = tf.keras.models.load_model(model_path)
+        self.model = Seq2Seq(None) # tf.keras.models.load_model(model_path)
         self.pred_dir = os.path.join(output_dir, "generated.txt")
         self.golden_dir = os.path.join(output_dir, "golden.txt")
         self.src_file = os.path.join(output_dir, "src.txt")

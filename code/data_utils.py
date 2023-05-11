@@ -5,8 +5,6 @@ from collections import defaultdict
 from copy import deepcopy
 import numpy as np
 import tensorflow as tf
-# import torch
-# import torch.utils.data as data
 from tqdm import tqdm
 import nltk
 nltk.download('punkt')
@@ -124,8 +122,9 @@ def collate_fn(data):
     return src_seqs, ext_src_seqs, trg_seqs, ext_trg_seqs, oov_lst
 
 
-class SQuadDatasetWithTag(tf.data.Dataset):
+class SQuadDatasetWithTag(): #tf.data.Dataset
     def __init__(self, src_file, trg_file, max_length, word2idx, debug=False):
+        # super().__init__(None)
         self.srcs = []
         self.tags = []
 
@@ -166,12 +165,30 @@ class SQuadDatasetWithTag(tf.data.Dataset):
             self.tags = self.tags[:100]
             self.num_seqs = 100
 
+    # @property
+    # def _inputs(self):
+    #     return tf.constant(np.zeros(1), dtype=tf.int32), \
+    #             tf.constant(np.zeros(1), dtype=tf.int32), \
+    #             tf.constant(np.zeros(1), dtype=tf.int32), \
+    #             tf.constant(np.zeros(1), dtype=tf.int32), \
+    #             tf.constant(np.zeros(1), dtype=tf.int32), \
+    #             tf.constant(np.zeros(1), dtype=tf.int32)
+
+    # @property
+    # def element_spec(self):
+    #     return (tf.TensorSpec(shape=(None,), dtype=tf.int32),
+    #             tf.TensorSpec(shape=(None,), dtype=tf.int32),
+    #             tf.TensorSpec(shape=(None,), dtype=tf.int32),
+    #             tf.TensorSpec(shape=(None,), dtype=tf.int32),
+    #             tf.TensorSpec(shape=(None,), dtype=tf.int32),
+    #             tf.TensorSpec(shape=(None,), dtype=tf.int32))
+
     def __getitem__(self, index):
         src_seq = self.srcs[index]
         trg_seq = self.trgs[index]
         tag_seq = self.tags[index]
 
-        tag_seq = tf.Tensor(tag_seq[:self.max_length])
+        tag_seq = tf.Variable(tag_seq[:self.max_length])
         src_seq, ext_src_seq, oov_lst = self.context2ids(
             src_seq, self.word2idx)
         trg_seq, ext_trg_seq = self.question2ids(
@@ -198,8 +215,8 @@ class SQuadDatasetWithTag(tf.data.Dataset):
             if len(ids) == self.max_length:
                 break
 
-        ids = tf.Tensor(ids)
-        extended_ids = tf.Tensor(extended_ids)
+        ids = tf.Variable(ids)
+        extended_ids = tf.Variable(extended_ids)
 
         return ids, extended_ids, oov_lst
 
@@ -223,8 +240,8 @@ class SQuadDatasetWithTag(tf.data.Dataset):
         ids.append(word2idx[END_TOKEN])
         extended_ids.append(word2idx[END_TOKEN])
 
-        ids = tf.Tensor(ids)
-        extended_ids = tf.Tensor(extended_ids)
+        ids = tf.Variable(ids)
+        extended_ids = tf.Variable(extended_ids)
 
         return ids, extended_ids
 
@@ -258,17 +275,57 @@ def get_loader(src_file, trg_file, word2idx,
                batch_size, use_tag=False, debug=False, shuffle=False):
     dataset = SQuadDatasetWithTag(src_file, trg_file, config.max_len,
                                   word2idx, debug)
-    dataset = dataset.batch(batch_size)
-    if shuffle:
-        dataset = dataset.shuffle(buffer_size=batch_size*4, reshuffle_each_iteration=True)
-    dataset = dataset.map(lambda x, y: (collate_fn_tag(x), collate_fn_tag(y)))
-    return dataset
-    # dataloader = data.DataLoader(dataset=dataset,
-    #                              batch_size=batch_size,
-    #                              shuffle=shuffle,
-    #                              collate_fn=collate_fn_tag)
+    k = 0
+    for i in dataset.srcs:
+        k = len(i) if len(i) > k else k
+    for i in range(len(dataset.srcs)):
+        if len(dataset.srcs[i]) != k:
+            dataset.srcs[i] = dataset.srcs[i] + [END_TOKEN] * (k-len(dataset.srcs[i]))
+    # srcs_tf = tf.Variable(dataset.srcs)
+    
+    k = 0
+    for i in dataset.tags:
+        k = len(i) if len(i) > k else k
+    k = 400 if k > 400 else k
+    for i in range(len(dataset.tags)):
+        if len(dataset.tags[i]) != k:
+            dataset.tags[i] = dataset.tags[i] + [0] * (k-len(dataset.tags[i]))
+    tags_tf = tf.Variable(dataset.tags)
 
-    # return dataloader
+    ids = list()
+    # START and END token is already in tokens lst
+    for tokens in dataset.srcs:
+        id = list()
+        for token in tokens:
+            if token in word2idx:
+                id.append(word2idx[token])
+            else:
+                id.append(word2idx["UNKNOWN"])
+            if len(id) == 400:
+                break
+        ids.append(id)
+
+    ids = tf.Variable(ids)
+
+    index = (ids.shape[1], tags_tf.shape[1])
+
+    new_dataset = tf.data.Dataset.from_tensor_slices(tf.concat([ids, tags_tf], -1))
+    batched_dataset = new_dataset.batch(batch_size)
+    if shuffle:
+        batched_dataset = batched_dataset.shuffle(buffer_size=batch_size*4, reshuffle_each_iteration=True)
+
+    return batched_dataset, index
+
+    new_dataset = tf.data.Dataset.from_tensor_slices(tf.ragged.constant((dataset.srcs, dataset.tags)))
+    batched_dataset = new_dataset.batch(batch_size)
+    if shuffle:
+        batched_dataset = batched_dataset.shuffle(buffer_size=batch_size*4, reshuffle_each_iteration=True)
+    final_dataset = batched_dataset.map(lambda x, y: (collate_fn_tag(x), collate_fn_tag(y)))
+    # dataset = dataset.batch(batch_size)
+    # if shuffle:
+    #     dataset = dataset.shuffle(buffer_size=batch_size*4, reshuffle_each_iteration=True)
+    # dataset = dataset.map(lambda x, y: (collate_fn_tag(x), collate_fn_tag(y)))
+    return final_dataset # dataset
 
 
 def make_vocab(src_file, trg_file, output_file, max_vocab_size):
@@ -547,7 +604,7 @@ def make_conll_format(examples, src_file, trg_file):
             print("new line")
         copied_tokens = deepcopy(c_tokens)
         q_tokens = example["ques_tokens"]
-        # always select the first candidate answer
+        
         start = example["y1s"][0]
         end = example["y2s"][0]
 
@@ -580,7 +637,6 @@ def split_dev(input_file, dev_file, test_file):
 
     input_data = input_file["data"]
 
-    # split the original SQuAD dev set into new dev / test set
     num_total = len(input_data)
     num_dev = int(num_total * 0.5)
 

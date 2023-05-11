@@ -11,11 +11,11 @@ test_trg_file = "./squad/tgt-test.txt"
 embedding = "./data/embedding.pkl"
 word2idx_file = "./data/word2idx.pkl"
 
-model_path = "./save/model.pt"
+model_path = "./model/model.p"
 
-device = "cuda:1"
-use_gpu = True
-debug = False
+device = "cpu" # "cuda:1"
+use_gpu = False # True
+debug = True # False
 vocab_size = 45000
 freeze_embedding = True
 
@@ -29,8 +29,7 @@ batch_size = 64
 dropout = 0.3
 max_grad_norm = 5.0
 
-# use_pointer = True 
-# we always enable maxout pointer
+use_pointer = True
 beam_size = 10
 min_decode_step = 8
 max_decode_step = 30
