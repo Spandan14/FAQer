@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 import config
 from data_utils import UNK_ID
 
@@ -8,18 +9,15 @@ class ParagraphEncoder(tf.keras.layers.Layer):
         
         self.embedding = tf.keras.layers.Embedding(vocab_size, embedding_size)
         self.ans_embedding = tf.keras.layers.Embedding(ans_embedding_size, ans_embedding_length)
-        lstm_input_size = embedding_size + ans_embedding_length
-
-        if embeddings is not None:
-            self.embedding = tf.keras.layers.Embedding(vocab_size, embedding_size).from_pretrained(embeddings, freeze=config.freeze_embedding)
+        self.lstm_input_size = embedding_size + ans_embedding_length
 
         self.num_layers = num_layers
         if self.num_layers == 1:
             dropout_rate = 0.0
         
         self.lstm = tf.keras.layers.Bidirectional(
-            tf.keras.layers.LSTM(hidden_size, dropout=dropout_rate, num_layers=num_layers, return_sequences=True), 
-            batch_input_shape=(None, None, lstm_input_size))
+            tf.keras.layers.LSTM(hidden_size, dropout=dropout_rate, return_sequences=True, return_state=True), num_layers=self.num_layers, 
+            batch_input_shape=(None, None, self.lstm_input_size))
         
         self.linear_transition = tf.keras.layers.Dense(2 * hidden_size)                     # input -> 2 * hidden_size
         self.update_layer = tf.keras.layers.Dense(2 * hidden_size, use_bias=False)          # input -> 4 * hidden_size
@@ -32,10 +30,10 @@ class ParagraphEncoder(tf.keras.layers.Layer):
 
         energies = queries @ tf.transpose(memories, perm=[0, 2, 1]) # (batch, d, t)
         mask = tf.expand_dims(mask, 1)
-        energies = energies - 1e12 * (1 - mask)                     # this is very questionable
+        energies = tf.cast(energies, dtype=tf.float32) - tf.cast(1e12, dtype=tf.float32) * tf.cast((1 - mask), dtype=tf.float32)                     # this is very questionable
 
         scores = tf.keras.activations.softmax(energies, axis=2)     # (batch, d, t)
-        context = scores @ queries                                  # (batch, d, d) = (batch, d, t) @ (batch, t, d)  # TODO verify this
+        context = scores @ queries                                  # (batch, d, d) = (batch, d, t) @ (batch, t, d)  
         inputs = tf.concat([queries, context], axis=2)
         f_t = tf.keras.activations.tanh(self.update_layer(inputs))
         g_t = tf.keras.activations.sigmoid(self.gate(inputs))
@@ -44,28 +42,20 @@ class ParagraphEncoder(tf.keras.layers.Layer):
         return updated_output
     
     def call(self, src_seq, src_len, ans_seq):
-        total_length = src_seq.shape[1]  # remains unused until we figure out packing
         src_embedding = self.embedding(src_seq)
         ans_embedding = self.ans_embedding(ans_seq)
-        embedding = tf.concat([src_embedding, ans_embedding], 2)
-        padded_embedding = tf.keras.preprocess.sequence.pad_sequences(
-            embedding, padding="post"
-        )
-        outputs, states = self.lstm(padded_embedding)
-        h, c = states
+        embedding = tf.concat([src_embedding, ans_embedding], -1)
+
+        # print(embedding.shape)
+        
+        padded_embedding = embedding
+        outputs, h, c = self.lstm(padded_embedding)
 
         # self attention
         mask = tf.math.sign(src_seq)
         memories = self.linear_transition(outputs)
         outputs = self.gated_self_attention(outputs, memories, mask)
 
-        b = h.shape[1]
-        d = h.shape[2]
-        h = tf.reshape(h, (2, 2, b, d))
-        h = tf.concat([h[:, 0, :, :], h[:, 1, :, :]], axis=-1)
-        
-        c = tf.reshape(c, (2, 2, b, d))
-        c = tf.concat([c[:, 0, :, :], c[:, 1, :, :]], axis=-1)
         concat_states = (h, c)
         
         return outputs, concat_states
@@ -76,9 +66,6 @@ class ParagraphDecoder(tf.keras.layers.Layer):
         super().__init__()
         self.vocab_size = vocab_size
         self.embedding = tf.keras.layers.Embedding(vocab_size, embedding_size)
-        
-        if embeddings is not None:
-            self.embedding = tf.keras.layers.Embedding(vocab_size, embedding_size).from_pretrained(embeddings, freeze=config.freeze_embedding)
 
         if num_layers == 1:
             dropout_rate = 0
@@ -87,21 +74,23 @@ class ParagraphDecoder(tf.keras.layers.Layer):
         self.reduce_layer = tf.keras.layers.Dense(embedding_size)                           # embedding_size + hidden_size -> embedding_size
         
         self.lstm = tf.keras.layers.Bidirectional(
-            tf.keras.layers.LSTM(hidden_size, dropout=dropout_rate, num_layers=num_layers, return_sequences=True), 
+            tf.keras.layers.LSTM(hidden_size, dropout=dropout_rate, return_sequences=True, return_state=True), # num_layers=num_layers, 
             batch_input_shape=(None, None, embedding_size))
         
         self.concat_layer = tf.keras.layers.Dense(hidden_size)                              # 2 * hidden_size -> hidden_size
         self.logit_layer = tf.keras.layers.Dense(vocab_size)                                # hidden_size -> vocab_size
     
     @staticmethod
+
     def attention(query, memories, mask):
         # query : [b, 1, d]
-        energy = query @ tf.transpose(memories, perm=[0, 2, 1])
-        energy = tf.expand_dims(energy, 1)
-        energy = energy - 1e12 * (1 - mask)                     # very questionable
-        attn_dist = tf.keras.activations.softmax(energy, axis=1)
+        energy = tf.matmul(query, tf.transpose(memories, perm=[0, 2, 1]))  # [b, 1, t]
+        energy = tf.squeeze(energy, axis=1)
+        mask = tf.cast(mask, tf.float32)
+        energy = tf.where(mask == 0, tf.fill(tf.shape(energy), -1e12), energy)
+        attn_dist = tf.nn.softmax(energy, axis=1)  # [b, 1, t]
         attn_dist = tf.expand_dims(attn_dist, 1)
-        context_vector = attn_dist @ memories
+        context_vector = tf.matmul(attn_dist, memories)  # [b, 1, d]
 
         return context_vector, energy
     
@@ -126,9 +115,11 @@ class ParagraphDecoder(tf.keras.layers.Layer):
         for i in range(max_len):
             y_i = tf.expand_dims(trg_seq[:, i], axis=1)
             embedded = self.embedding(y_i)
+
             lstm_inputs = tf.concat([embedded, prev_context], axis=2)
             lstm_inputs = self.reduce_layer(lstm_inputs)
-            output, states = self.lstm(lstm_inputs, initial_state=prev_states)
+            output, h, c = self.lstm(lstm_inputs, initial_state=prev_states)
+            states = (h, c)
 
             # encoder-decoder attention
             context, energy = self.attention(output, memories, encoder_mask)
@@ -138,20 +129,24 @@ class ParagraphDecoder(tf.keras.layers.Layer):
             logit = self.logit_layer(logit_input)
 
             # maxout pointer network
-            num_oov = max(tf.math.maximum(ext_src_seq - self.vocab_size + 1), 0)
-            zeros = tf.zeros((batch_size, num_oov))
-            extended_logit = tf.concat([logit, zeros], axis=1)
-            out = tf.zeros_like(extended_logit) - 1e12
-            out = tf.math.segment_max(energy, ext_src_seq)  # TODO verify
-            out = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=out)     # TODO verify
-            logit = extended_logit + out
-            logit = logit - 1e12 * (1 - logit)
+            if config.use_pointer:
+                num_oov = max(tf.math.reduce_max(ext_src_seq - self.vocab_size + 1), 0)
+                zeros = tf.zeros((batch_size, num_oov))
+                extended_logit = tf.concat([logit, zeros], axis=1)
+                out = tf.zeros_like(extended_logit) - 1e12
+                out = tf.math.segment_max(energy, ext_src_seq)  
+                out = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=out)     
+                logit = extended_logit + out
+                logit = logit - 1e12 * (1 - logit)
 
-            logits.append(logit)
+            logits.append(logit[:, :, 0, 0])
             prev_states = states
             prev_context = context
+        
+        # print(logits[0].shape, len(logits))
 
-        logits = tf.stack(logits, dim=1)
+        logits = tf.stack(logits, axis=1)
+        # print(logits.shape)
 
         return logits
     
@@ -172,10 +167,10 @@ class ParagraphDecoder(tf.keras.layers.Layer):
         zeros = tf.zeros((batch_size, num_oov))
         extended_logit = tf.concat([logit, zeros], axis=1)
         out = tf.zeros_like(extended_logit) - 1e12
-        out = tf.math.segment_max(energy, ext_x)  # TODO verify
-        out = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=out)     # TODO verify
+        out = tf.math.segment_max(energy, ext_x)
+        out = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=out)
         logit = extended_logit + out
-        logit = tf.map_fin(fn=lambda x: 0 if x == -1e12 else x, elems=logit)
+        logit = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=logit)
         # forcing UNK prob 0
         logit[:, UNK_ID] = -1e12
 
@@ -190,7 +185,9 @@ class Seq2Seq(tf.keras.layers.Layer):
                                         config.embedding_size,
                                         config.hidden_size,
                                         config.num_layers,
-                                        config.dropout)
+                                        config.dropout,
+                                        config.hidden_size,
+                                        config.embedding_size)
         self.decoder = ParagraphDecoder(embedding, 
                                         config.vocab_size,
                                         config.embedding_size,
@@ -204,7 +201,10 @@ class Seq2Seq(tf.keras.layers.Layer):
         enc_outputs, enc_states = self.encoder(src_seq, src_len, tag_seq)
         sos_trg = trg_seq[:, :-1]
 
+        # print(enc_outputs.shape, enc_states[0].shape, enc_states[1].shape, sos_trg.shape)
+
         logits = self.decoder(sos_trg, ext_src_seq, enc_states, enc_outputs, enc_mask)
+        # print(logits.shape)
         return logits
 
 
