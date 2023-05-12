@@ -122,9 +122,8 @@ def collate_fn(data):
     return src_seqs, ext_src_seqs, trg_seqs, ext_trg_seqs, oov_lst
 
 
-class SQuadDatasetWithTag(tf.data.Dataset):
+class SQuadDatasetWithTag():
     def __init__(self, src_file, trg_file, max_length, word2idx, debug=False):
-        # super().__init__(None)
         self.srcs = []
         self.tags = []
 
@@ -164,24 +163,6 @@ class SQuadDatasetWithTag(tf.data.Dataset):
             self.trgs = self.trgs[:100]
             self.tags = self.tags[:100]
             self.num_seqs = 100
-
-    # @property
-    # def _inputs(self):
-    #     return tf.constant(np.zeros(1), dtype=tf.int32), \
-    #             tf.constant(np.zeros(1), dtype=tf.int32), \
-    #             tf.constant(np.zeros(1), dtype=tf.int32), \
-    #             tf.constant(np.zeros(1), dtype=tf.int32), \
-    #             tf.constant(np.zeros(1), dtype=tf.int32), \
-    #             tf.constant(np.zeros(1), dtype=tf.int32)
-
-    # @property
-    # def element_spec(self):
-    #     return (tf.TensorSpec(shape=(None,), dtype=tf.int32),
-    #             tf.TensorSpec(shape=(None,), dtype=tf.int32),
-    #             tf.TensorSpec(shape=(None,), dtype=tf.int32),
-    #             tf.TensorSpec(shape=(None,), dtype=tf.int32),
-    #             tf.TensorSpec(shape=(None,), dtype=tf.int32),
-    #             tf.TensorSpec(shape=(None,), dtype=tf.int32))
 
     def __getitem__(self, index):
         src_seq = self.srcs[index]
@@ -275,17 +256,45 @@ def get_loader(src_file, trg_file, word2idx,
                batch_size, use_tag=False, debug=False, shuffle=False):
     dataset = SQuadDatasetWithTag(src_file, trg_file, config.max_len,
                                   word2idx, debug)
-    dataset = dataset.batch(batch_size)
-    if shuffle:
-        dataset = dataset.shuffle(buffer_size=batch_size*4, reshuffle_each_iteration=True)
-    dataset = dataset.map(lambda x, y: (collate_fn_tag(x), collate_fn_tag(y)))
-    return dataset
-    # dataloader = data.DataLoader(dataset=dataset,
-    #                              batch_size=batch_size,
-    #                              shuffle=shuffle,
-    #                              collate_fn=collate_fn_tag)
+    k = 0
+    for i in dataset.srcs:
+        k = len(i) if len(i) > k else k
+    for i in range(len(dataset.srcs)):
+        if len(dataset.srcs[i]) != k:
+            dataset.srcs[i] = dataset.srcs[i] + [END_TOKEN] * (k-len(dataset.srcs[i]))
+    
+    k = 0
+    for i in dataset.tags:
+        k = len(i) if len(i) > k else k
+    k = 400 if k > 400 else k
+    for i in range(len(dataset.tags)):
+        if len(dataset.tags[i]) != k:
+            dataset.tags[i] = dataset.tags[i] + [0] * (k-len(dataset.tags[i]))
+    tags_tf = tf.Variable(dataset.tags)
 
-    # return dataloader
+    ids = list()
+    # START and END token is already in tokens lst
+    for tokens in dataset.srcs:
+        id = list()
+        for token in tokens:
+            if token in word2idx:
+                id.append(word2idx[token])
+            else:
+                id.append(word2idx["UNKNOWN"])
+            if len(id) == 400:
+                break
+        ids.append(id)
+
+    ids = tf.Variable(ids)
+
+    index = (ids.shape[1], tags_tf.shape[1])
+
+    new_dataset = tf.data.Dataset.from_tensor_slices(tf.concat([ids, tags_tf], -1))
+    batched_dataset = new_dataset.batch(batch_size)
+    if shuffle:
+        batched_dataset = batched_dataset.shuffle(buffer_size=batch_size*4, reshuffle_each_iteration=True)
+
+    return batched_dataset, index
 
 
 def make_vocab(src_file, trg_file, output_file, max_vocab_size):

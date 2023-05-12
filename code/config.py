@@ -29,8 +29,7 @@ batch_size = 64
 dropout = 0.3
 max_grad_norm = 5.0
 
-# use_pointer = True 
-# we always enable maxout pointer
+use_pointer = False # True
 beam_size = 10
 min_decode_step = 8
 max_decode_step = 30
