@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+import numpy as np
 import config
 from data_utils import UNK_ID
 
@@ -31,6 +32,7 @@ class ParagraphEncoder(tf.keras.layers.Layer):
         energies = queries @ tf.transpose(memories, perm=[0, 2, 1]) # (batch, d, t)
         mask = tf.expand_dims(mask, 1)
         energies = tf.cast(energies, dtype=tf.float32) - tf.cast(1e12, dtype=tf.float32) * tf.cast((1 - mask), dtype=tf.float32)                     # this is very questionable
+        energies = tf.cast(energies, dtype=tf.float32) - tf.cast(1e12, dtype=tf.float32) * tf.cast((1 - mask), dtype=tf.float32)                     # this is very questionable
 
         scores = tf.keras.activations.softmax(energies, axis=2)     # (batch, d, t)
         context = scores @ queries                                  # (batch, d, d) = (batch, d, t) @ (batch, t, d)  
@@ -57,6 +59,17 @@ class ParagraphEncoder(tf.keras.layers.Layer):
         outputs = self.gated_self_attention(outputs, memories, mask)
 
         concat_states = (h, c)
+
+        # print(h.shape)
+
+        # b = h.shape[1]
+        # d = h.shape[2]
+        # h = tf.reshape(h, (2, 2, b, d))
+        # h = tf.concat([h[:, 0, :, :], h[:, 1, :, :]], axis=-1)
+        
+        # c = tf.reshape(c, (2, 2, b, d))
+        # c = tf.concat([c[:, 0, :, :], c[:, 1, :, :]], axis=-1)
+        # concat_states = (h, c)
         
         return outputs, concat_states
     
@@ -89,7 +102,13 @@ class ParagraphDecoder(tf.keras.layers.Layer):
         mask = tf.cast(mask, tf.float32)
         energy = tf.where(mask == 0, tf.fill(tf.shape(energy), -1e12), energy)
         attn_dist = tf.nn.softmax(energy, axis=1)  # [b, 1, t]
+        energy = tf.matmul(query, tf.transpose(memories, perm=[0, 2, 1]))  # [b, 1, t]
+        energy = tf.squeeze(energy, axis=1)
+        mask = tf.cast(mask, tf.float32)
+        energy = tf.where(mask == 0, tf.fill(tf.shape(energy), -1e12), energy)
+        attn_dist = tf.nn.softmax(energy, axis=1)  # [b, 1, t]
         attn_dist = tf.expand_dims(attn_dist, 1)
+        context_vector = tf.matmul(attn_dist, memories)  # [b, 1, d]
         context_vector = tf.matmul(attn_dist, memories)  # [b, 1, d]
 
         return context_vector, energy
@@ -116,8 +135,11 @@ class ParagraphDecoder(tf.keras.layers.Layer):
             y_i = tf.expand_dims(trg_seq[:, i], axis=1)
             embedded = self.embedding(y_i)
 
+
             lstm_inputs = tf.concat([embedded, prev_context], axis=2)
             lstm_inputs = self.reduce_layer(lstm_inputs)
+            output, h, c = self.lstm(lstm_inputs, initial_state=prev_states)
+            states = (h, c)
             output, h, c = self.lstm(lstm_inputs, initial_state=prev_states)
             states = (h, c)
 
@@ -139,6 +161,7 @@ class ParagraphDecoder(tf.keras.layers.Layer):
                 logit = extended_logit + out
                 logit = logit - 1e12 * (1 - logit)
 
+            logits.append(logit[:, :, 0, 0])
             logits.append(logit[:, :, 0, 0])
             prev_states = states
             prev_context = context
@@ -170,6 +193,7 @@ class ParagraphDecoder(tf.keras.layers.Layer):
         out = tf.math.segment_max(energy, ext_x)
         out = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=out)
         logit = extended_logit + out
+        logit = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=logit)
         logit = tf.map_fn(fn=lambda x: 0 if x == -1e12 else x, elems=logit)
         # forcing UNK prob 0
         logit[:, UNK_ID] = -1e12

@@ -15,6 +15,7 @@ class Trainer(object):
         with open(config.embedding, "rb") as f:
             embedding = pickle.load(f)
             embedding = tf.Variable(embedding, dtype=tf.float32)
+            embedding = tf.Variable(embedding, dtype=tf.float32)
 
         with open(config.word2idx_file, "rb") as f:
             word2idx = pickle.load(f)
@@ -34,11 +35,25 @@ class Trainer(object):
                                      batch_size=128,
                                      debug=config.debug)
         self.train_dataset, self.tr_sz = get_loader(config.train_src_file,
+        self.train_loader, _ = get_loader(config.train_src_file,
                                        config.train_trg_file,
                                        word2idx,
                                        use_tag=True,
                                        batch_size=config.batch_size,
                                        debug=config.debug)
+        self.dev_loader, _ = get_loader(config.dev_src_file,
+                                     config.dev_trg_file,
+                                     word2idx,
+                                     use_tag=True,
+                                     batch_size=128,
+                                     debug=config.debug)
+        self.train_dataset, self.tr_sz = get_loader(config.train_src_file,
+                                       config.train_trg_file,
+                                       word2idx,
+                                       use_tag=True,
+                                       batch_size=config.batch_size,
+                                       debug=config.debug)
+        self.dev_dataset, self.dv_sz = get_loader(config.dev_src_file,
         self.dev_dataset, self.dv_sz = get_loader(config.dev_src_file,
                                      config.dev_trg_file,
                                      word2idx,
@@ -104,9 +119,19 @@ class Trainer(object):
         src_seq, trg_seq = tf.split(train_data, [self.tr_sz[0], self.tr_sz[1]], axis=1)
         ext_src_seq, tag_seq = tf.split(train_data, [self.tr_sz[0], self.tr_sz[1]], axis=1)
         _, ext_trg_seq = tf.split(train_data, [self.tr_sz[0], self.tr_sz[1]], axis=1)
+        # src_seq, ext_src_seq, trg_seq, ext_trg_seq, tag_seq, _ = train_data
+
+        # print(len(train_data[0]), self.tr_sz)
+
+        src_seq, trg_seq = tf.split(train_data, [self.tr_sz[0], self.tr_sz[1]], axis=1)
+        ext_src_seq, tag_seq = tf.split(train_data, [self.tr_sz[0], self.tr_sz[1]], axis=1)
+        _, ext_trg_seq = tf.split(train_data, [self.tr_sz[0], self.tr_sz[1]], axis=1)
 
         eos_trg = ext_trg_seq[:, 1:] # ext_trg_seq[:, 1:]
+        eos_trg = ext_trg_seq[:, 1:] # ext_trg_seq[:, 1:]
 
+        with tf.GradientTape() as tape:
+            logits = tf.cast(self.model(src_seq, tag_seq, ext_src_seq, trg_seq), dtype=tf.float32)
         with tf.GradientTape() as tape:
             logits = tf.cast(self.model(src_seq, tag_seq, ext_src_seq, trg_seq), dtype=tf.float32)
 
@@ -125,6 +150,8 @@ class Trainer(object):
         
         gradients = tape.gradient(loss, self.model.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+        gradients = tape.gradient(loss, self.model.trainable_variables)
+        self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
         
         return loss, preds
 
@@ -137,6 +164,7 @@ class Trainer(object):
 
         eos_trg = ext_trg_seq[:, 1:]
 
+        logits = tf.cast(self.model(src_seq, tag_seq, ext_src_seq, trg_seq), dtype=tf.float32)
         logits = tf.cast(self.model(src_seq, tag_seq, ext_src_seq, trg_seq), dtype=tf.float32)
 
         batch_size = logits.shape[0]
