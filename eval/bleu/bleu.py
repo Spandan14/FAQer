@@ -1,18 +1,15 @@
-#!/usr/bin/env python
-# 
-# File Name : bleu.py
-#
-# Description : Wrapper for BLEU scorer.
-#
 # Creation Date : 06-01-2015
 # Last Modified : Thu 19 Mar 2015 09:13:28 PM PDT
 # Authors : Hao Fang <hfang@uw.edu> and Tsung-Yi Lin <tl483@cornell.edu>
 
-# from bleu_scorer import BleuScorer
-
 import copy
 import sys, math, re
 from collections import defaultdict
+
+'''Provides:
+cook_refs(refs, n=4): Transform a list of reference sentences as strings into a form usable by cook_test().
+cook_test(test, refs, n=4): Transform a test sentence as a string (together with the cooked reference sentences) into a form usable by score_cooked().
+'''
 
 def precook(s, n=4, out=False):
     """Takes a string as input and returns an object that can be given to
