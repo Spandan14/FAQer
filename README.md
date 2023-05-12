@@ -16,7 +16,7 @@ However, the dataset we used was the Question Answering in Context, provides thr
 
 - This encoding passage gets fed into a stacked bidirectional LSTM, which eventually outputs a hidden representation of the initial passage. This is accomplished in our code using the $\texttt{Bidrectional}$ module which wraps a $\texttt{tf.keras.layers.LSTM}$ stack. The LSTM also has a dropout parameter, and all of these can be found inside $\texttt{config.py}$.
 
-- We compute self attention on this passage, and pass it through a set of feature fusion gating layers, allowing the model to learn the relevance of certain input features. This may include sentence structure, overall theme of the passage, and the tone of the author. We accomplish this in $\texttt{gated_self_attention}$. This function computes energy and score tensors that are passed through hyperbolic tangent and softmax activations to compute the output, as described in the source literature.
+- We compute self attention on this passage, and pass it through a set of feature fusion gating layers, allowing the model to learn the relevance of certain input features. This may include sentence structure, overall theme of the passage, and the tone of the author. We accomplish this in $\texttt{gated$\_$self$\_$attention}$. This function computes energy and score tensors that are passed through hyperbolic tangent and softmax activations to compute the output, as described in the source literature.
 
 - We then move to the decoder stack, where we use the target context sequence as a partial decoding. This gets passed into a unidirectional $\texttt{tf.keras.layers.LSTM}$ layer, which simply outputs a decoded state.
 
