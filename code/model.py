@@ -73,9 +73,7 @@ class ParagraphDecoder(tf.keras.layers.Layer):
         self.encoder_transition = tf.keras.layers.Dense(hidden_size)                        # hidden_size -> hidden_size
         self.reduce_layer = tf.keras.layers.Dense(embedding_size)                           # embedding_size + hidden_size -> embedding_size
         
-        self.lstm = tf.keras.layers.Bidirectional(
-            tf.keras.layers.LSTM(hidden_size, dropout=dropout_rate, return_sequences=True, return_state=True), # num_layers=num_layers, 
-            batch_input_shape=(None, None, embedding_size))
+        self.lstm = tf.keras.layers.LSTM(hidden_size, dropout=dropout_rate, return_sequences=True, return_state=True)
         
         self.concat_layer = tf.keras.layers.Dense(hidden_size)                              # 2 * hidden_size -> hidden_size
         self.logit_layer = tf.keras.layers.Dense(vocab_size)                                # hidden_size -> vocab_size
