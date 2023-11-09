@@ -34,15 +34,6 @@ However, the dataset we used was the Question Answering in Context, provides thr
 
 - Following up from the previous limitation, we ran into lack of RAM issues both while training, as well as while attempting to generate questions hence our $\texttt{generated.txt}$ file only has around 100 questions that have been generated.
 
-## Results
-
-Bleu scores to display our results in a summary:
-
-- Bleu_1: 0.26599
-- Bleu_2: 0.09290
-- Bleu_3: 0.03793
-- Bleu_4: 0.01669
-
 ## Conclusion
 
 Through the use of of a bi-directional LSTM with a gated self-attention encoder and maxout pointer decoder, we created an advanced computational model to generate a comprehensive set of relevant questions based on the textual contents of a given corpus. Even though we weren't able to generate amazing Bleu scores due to the challenges we faced, we believe that the model displays a positive trend which is expected to display positive results when properly trained on the entire dataset.
